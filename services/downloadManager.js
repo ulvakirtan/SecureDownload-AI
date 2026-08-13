@@ -1,8 +1,7 @@
-// modules/downloadParser.js
-// Module 2 of the pipeline: Download Parser.
-// Takes the raw chrome.downloads.DownloadItem and normalizes it into a
-// stable shape the rest of the pipeline (and the popup UI) can rely on,
-// regardless of what Chrome's API happens to include on a given platform.
+/**
+ * @file downloadManager.js
+ * @description Normalizes raw chrome.downloads.DownloadItem instances and extracts metadata.
+ */
 
 import {
   EXECUTABLE_EXTENSIONS,
@@ -12,6 +11,7 @@ import {
   MEDIA_EXTENSIONS,
   CODE_EXTENSIONS
 } from "./config.js";
+import "../types/typedefs.js";
 
 function getExtension(filename = "") {
   const match = /\.([a-zA-Z0-9]+)$/.exec(filename);
@@ -46,8 +46,9 @@ function getFileCategory(ext = "") {
 }
 
 /**
+ * Normalizes Chrome DownloadItem and checks native danger flags.
  * @param {chrome.downloads.DownloadItem} item
- * @returns {object} normalized download descriptor
+ * @returns {import("../types/typedefs.js").DownloadItemParsed}
  */
 export function parseDownloadItem(item) {
   const rawFilename = (item.filename || "").split(/[\\/]/).pop();
@@ -56,26 +57,21 @@ export function parseDownloadItem(item) {
   const filename = rawFilename || (url.split("/").pop().split("?")[0] || "download");
   const domain = getDomain(url);
   const category = getFileCategory(extension);
+  
+  // Native Chrome danger classification signal (Bug 6 fix)
+  const danger = item.danger || "safe";
+  const isDangerousNative = danger !== "safe" && danger !== "accepted";
 
   return {
     downloadId: item.id,
     url,
-    originalUrl: item.url,
-    referrer: item.referrer || "",
+    domain,
     filename,
     extension,
     category,
-    mimeType: item.mime || "application/octet-stream",
-    fileSizeBytes: item.fileSize ?? item.totalBytes ?? -1,
-    domain,
-    isHttps: url.startsWith("https://"),
-    isExecutable: category === "executable",
-    isArchive: category === "archive",
-    isDocument: category === "document",
-    isScript: category === "script",
-    startTimeIso: item.startTime || new Date().toISOString(),
-    danger: item.danger || "safe",
-    state: item.state || "in_progress"
+    mime: item.mime || "application/octet-stream",
+    bytesTotal: item.fileSize ?? item.totalBytes ?? -1,
+    danger,
+    isDangerousNative
   };
 }
-

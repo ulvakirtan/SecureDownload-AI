@@ -1,23 +1,28 @@
-// modules/threatIntelligence.js
-// Module 6: Threat Intelligence.
-// Queries VirusTotal (URL + file hash reports) and Google Safe Browsing.
-// Both require API keys the user supplies in Options — this module never
-// ships a bundled key. If a key is missing, that check is skipped and
-// reported as "not_configured" rather than silently failing.
+/**
+ * @file threatService.js
+ * @description Integrates with VirusTotal API v3 (URL & SHA-256 hash reports) and Google Safe Browsing API.
+ */
 
 import { ENDPOINTS } from "./config.js";
+import "../types/typedefs.js";
 
 function toBase64Url(str) {
   return btoa(str).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
 
+/**
+ * Check VirusTotal threat intelligence for URL or File SHA-256 hash.
+ * @param {{url: string, sha256?: string|null}} params
+ * @param {string} apiKey
+ * @returns {Promise<import("../types/typedefs.js").VirusTotalResult>}
+ */
 export async function checkVirusTotal({ url, sha256 }, apiKey) {
   if (!apiKey) {
     return { vtScore: 50, status: "not_configured", malicious: 0, suspicious: 0, harmless: 0 };
   }
 
   try {
-    // Prefer a hash lookup when we have one — it's a direct file report.
+    // Prefer direct file SHA-256 lookup when available (Fix for Bug 4)
     if (sha256) {
       const res = await fetch(`${ENDPOINTS.virusTotalFileReport}/${sha256}`, {
         headers: { "x-apikey": apiKey }
@@ -31,18 +36,22 @@ export async function checkVirusTotal({ url, sha256 }, apiKey) {
       return scoreFromStats(stats, "file_hash");
     }
 
-    // Fall back to a URL report.
-    const id = toBase64Url(url);
-    const res = await fetch(`${ENDPOINTS.virusTotalUrlReport}/${id}`, {
-      headers: { "x-apikey": apiKey }
-    });
-    if (res.status === 404) {
-      return { vtScore: 60, status: "unseen_by_virustotal", malicious: 0, suspicious: 0, harmless: 0 };
+    // Fall back to URL report
+    if (url) {
+      const id = toBase64Url(url);
+      const res = await fetch(`${ENDPOINTS.virusTotalUrlReport}/${id}`, {
+        headers: { "x-apikey": apiKey }
+      });
+      if (res.status === 404) {
+        return { vtScore: 60, status: "unseen_by_virustotal", malicious: 0, suspicious: 0, harmless: 0 };
+      }
+      if (!res.ok) throw new Error(`VirusTotal URL lookup failed: ${res.status}`);
+      const data = await res.json();
+      const stats = data?.data?.attributes?.last_analysis_stats || {};
+      return scoreFromStats(stats, "url");
     }
-    if (!res.ok) throw new Error(`VirusTotal URL lookup failed: ${res.status}`);
-    const data = await res.json();
-    const stats = data?.data?.attributes?.last_analysis_stats || {};
-    return scoreFromStats(stats, "url");
+
+    return { vtScore: 50, status: "no_data_provided", malicious: 0, suspicious: 0, harmless: 0 };
   } catch (err) {
     return { vtScore: 50, status: "error", error: String(err), malicious: 0, suspicious: 0, harmless: 0 };
   }
@@ -63,6 +72,12 @@ function scoreFromStats(stats, source) {
   return { vtScore, status: `analyzed_${source}`, malicious, suspicious, harmless, total };
 }
 
+/**
+ * Check Google Safe Browsing API.
+ * @param {string} url
+ * @param {string} apiKey
+ * @returns {Promise<import("../types/typedefs.js").SafeBrowsingResult>}
+ */
 export async function checkSafeBrowsing(url, apiKey) {
   if (!apiKey) {
     return { safeBrowsingScore: 50, status: "not_configured", flagged: false };
@@ -91,7 +106,7 @@ export async function checkSafeBrowsing(url, apiKey) {
       safeBrowsingScore: flagged ? 0 : 100,
       status: "analyzed",
       flagged,
-      threatTypes: flagged ? data.matches.map(m => m.threatType) : []
+      threatTypes: flagged ? data.matches.map((m) => m.threatType) : []
     };
   } catch (err) {
     return { safeBrowsingScore: 50, status: "error", error: String(err), flagged: false };

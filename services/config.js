@@ -1,7 +1,7 @@
-// modules/config.js
-// Central configuration: weights, endpoints, defaults.
-// Nothing here should require a rebuild to change — everything user-tunable
-// (API keys, extra trusted domains) lives in chrome.storage, not this file.
+/**
+ * @file config.js
+ * @description Centralized system configuration: weights, risk thresholds, publisher CDNs, vulnerability definitions, API endpoints.
+ */
 
 export const WEIGHTS = {
   officialWebsite: 0.20,
@@ -13,8 +13,7 @@ export const WEIGHTS = {
   sourceReputation: 0.05
 };
 
-// Sanity check at load time — if these ever drift from 1.0 the formula in
-// trustEngine.js silently produces a score out of the wrong range.
+// Sanity check assertion constant for weight calculation
 export const WEIGHT_SUM = Object.values(WEIGHTS).reduce((a, b) => a + b, 0);
 
 export const RISK_THRESHOLDS = {
@@ -218,9 +217,6 @@ export const VULNERABILITY_DEFINITIONS = {
   }
 };
 
-
-// Endpoints for external intelligence. All calls are made from background.js
-// so API keys never touch the popup UI thread.
 export const ENDPOINTS = {
   virusTotalUrlReport: "https://www.virustotal.com/api/v3/urls",
   virusTotalFileReport: "https://www.virustotal.com/api/v3/files",

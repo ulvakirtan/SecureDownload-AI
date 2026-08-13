@@ -1,43 +1,57 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SecureDownload AI — Settings</title>
+  <link rel="stylesheet" href="../styles/theme.css" />
   <link rel="stylesheet" href="options.css" />
 </head>
 <body>
   <div class="wrap">
-    <h1>SecureDownload AI · Settings</h1>
-    <p class="lede">
-      Analysis runs entirely from your browser. API keys below are stored locally
-      (<code>chrome.storage.local</code>) and are only ever sent to their respective service.
-    </p>
+    <header class="header">
+      <h1>SecureDownload AI · Settings</h1>
+      <p class="lede">
+        Configure threat intelligence API credentials, automated download actions, and trusted domain lists.
+      </p>
+    </header>
+
+    <div class="security-warning">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+        <line x1="12" y1="9" x2="12" y2="13"/>
+        <line x1="12" y1="17" x2="12.01" y2="17"/>
+      </svg>
+      <div>
+        <strong>Security & Privacy Note:</strong> API keys entered below are stored in Chrome local extension storage (<code>chrome.storage.local</code>). They are sent exclusively over HTTPS to official provider APIs (VirusTotal, Google, NVD).
+      </div>
+    </div>
 
     <section class="card">
       <h2>Threat Intelligence API Keys</h2>
 
-      <label for="vtKey">VirusTotal API key</label>
+      <label for="vtKey">VirusTotal API Key</label>
       <input id="vtKey" type="password" placeholder="Paste your VirusTotal API key" autocomplete="off" />
-      <p class="hint">Free tier available at virustotal.com/gui/join-us. Without a key, VirusTotal checks are skipped (neutral score).</p>
+      <p class="hint">Free tier available at virustotal.com. Without a key, VirusTotal checks are skipped (neutral score).</p>
 
-      <label for="sbKey">Google Safe Browsing API key</label>
+      <label for="sbKey">Google Safe Browsing API Key</label>
       <input id="sbKey" type="password" placeholder="Paste your Safe Browsing API key" autocomplete="off" />
-      <p class="hint">From Google Cloud Console (Safe Browsing API). Without a key, this check is skipped.</p>
+      <p class="hint">From Google Cloud Console (Safe Browsing API). Without a key, Safe Browsing lookup is skipped.</p>
 
-      <label for="nvdKey">NVD API key (optional)</label>
+      <label for="nvdKey">NVD API Key (Optional)</label>
       <input id="nvdKey" type="password" placeholder="Optional — raises NVD rate limits" autocomplete="off" />
-      <p class="hint">NVD works without a key at a lower rate limit; add one from nvd.nist.gov/developers/request-an-api-key for heavier use.</p>
+      <p class="hint">NVD works without a key at lower rate limits; add one for heavier scan volumes.</p>
     </section>
 
     <section class="card">
-      <h2>Behavior</h2>
+      <h2>Behavior & Automation</h2>
       <label class="row">
         <input type="checkbox" id="autoAnalyze" />
         <span>Automatically analyze new downloads</span>
       </label>
       <label class="row">
         <input type="checkbox" id="blockDangerous" />
-        <span>Auto-delete files scored "Dangerous" without asking</span>
+        <span>Auto-delete files scored "Dangerous" without prompt</span>
       </label>
     </section>
 
@@ -49,12 +63,12 @@
 
     <section class="card">
       <h2>Known-Good File Hashes</h2>
-      <p class="hint">One per line, format <code>filename.exe = sha256hash</code>. Used for the File Integrity check.</p>
+      <p class="hint">One per line, format <code>filename.exe = sha256hash</code>. Used for File Integrity validation.</p>
       <textarea id="knownHashes" rows="4" placeholder="setup.exe = 3a7bd3e2360a3d..."></textarea>
     </section>
 
     <button id="saveBtn" class="save-btn">Save Settings</button>
-    <p id="savedMsg" class="saved-msg hidden">Saved.</p>
+    <p id="savedMsg" class="saved-msg hidden">Settings Saved Successfully.</p>
   </div>
 
   <script src="options.js" type="module"></script>

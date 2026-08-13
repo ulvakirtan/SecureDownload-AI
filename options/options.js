@@ -1,6 +1,10 @@
-// options/options.js
+/**
+ * @file options.js
+ * @description Settings page script utilizing unified storageService.
+ */
 
-import { getSettings, saveSettings } from "../modules/storageManager.js";
+import { getSettings, saveSettings } from "../services/storageService.js";
+import "../types/typedefs.js";
 
 const els = {
   vtKey: document.getElementById("vtKey"),

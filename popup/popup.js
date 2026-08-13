@@ -1,7 +1,11 @@
-// popup/popup.js
-// Module 12: Popup Dashboard (behavior & presentation layer).
+/**
+ * @file popup.js
+ * @description Secure presentation & interaction layer for the SecureDownload AI Popup.
+ */
 
-import { WEIGHTS } from "../modules/config.js";
+import { getHistory, getStats, getSettings, saveSettings } from "../services/storageService.js";
+import { WEIGHTS } from "../services/config.js";
+import "../types/typedefs.js";
 
 const FACTOR_META = [
   { key: "officialWebsite", label: "Official Website", from: (r) => r.details.source.officialWebsiteScore, applicable: () => true },
@@ -13,51 +17,38 @@ const FACTOR_META = [
   { key: "sourceReputation", label: "Source Rep.", from: (r) => r.details.source.sourceReputationScore, applicable: () => true }
 ];
 
-const GAUGE_R = 72;
-const GAUGE_CIRCUMFERENCE = 2 * Math.PI * GAUGE_R; // ~452.389
-
-const FACTOR_R = 84;
-const FACTOR_CIRCUMFERENCE = 2 * Math.PI * FACTOR_R; // ~527.787
+const GAUGE_R = 82;
+const GAUGE_CIRCUMFERENCE = 2 * Math.PI * GAUGE_R;
 
 const els = {
-  // Tabs
   tabDownload: document.getElementById("tabDownload"),
   tabWebsite: document.getElementById("tabWebsite"),
   tabHistory: document.getElementById("tabHistory"),
 
-  // Views
   downloadView: document.getElementById("downloadView"),
   websiteView: document.getElementById("websiteView"),
   historyPanel: document.getElementById("historyPanel"),
 
-  // Download view elements
   emptyState: document.getElementById("emptyState"),
   resultView: document.getElementById("resultView"),
   fileExtBadge: document.getElementById("fileExtBadge"),
   fileName: document.getElementById("fileName"),
   fileDomain: document.getElementById("fileDomain"),
-  
-  // Gauge
-  gaugeSvg: document.getElementById("gaugeSvg"),
+
   gaugeProgress: document.getElementById("gaugeProgress"),
-  gaugeFactorTrack: document.getElementById("gaugeFactorTrack"),
   gaugeScore: document.getElementById("gaugeScore"),
   gaugeRiskBadge: document.getElementById("gaugeRiskBadge"),
   gaugeRiskLabel: document.getElementById("gaugeRiskLabel"),
 
-  // Recommendation
   recommendationBanner: document.getElementById("recommendationBanner"),
-  recIcon: document.getElementById("recIcon"),
   recHeadline: document.getElementById("recHeadline"),
   recDetail: document.getElementById("recDetail"),
   factorList: document.getElementById("factorList"),
-  
-  // Actions
+
   resumeBtn: document.getElementById("resumeBtn"),
   deleteBtn: document.getElementById("deleteBtn"),
   detailsBtn: document.getElementById("detailsBtn"),
 
-  // Website Security view elements
   scanActiveTabBtn: document.getElementById("scanActiveTabBtn"),
   scanBtnText: document.getElementById("scanBtnText"),
   webDomain: document.getElementById("webDomain"),
@@ -70,10 +61,10 @@ const els = {
   xfoStatus: document.getElementById("xfoStatus"),
   vulnList: document.getElementById("vulnList"),
 
-  // History & Footer
   historyList: document.getElementById("historyList"),
   statsLine: document.getElementById("statsLine"),
-  optionsBtn: document.getElementById("optionsBtn")
+  optionsBtn: document.getElementById("optionsBtn"),
+  themeToggleBtn: document.getElementById("themeToggleBtn")
 };
 
 let currentRecord = null;
@@ -83,9 +74,9 @@ let animationFrameId = null;
 init();
 
 async function init() {
+  await setupTheme();
   wireTabsAndButtons();
 
-  // Set SVG progress stroke dasharray initial baseline
   if (els.gaugeProgress) {
     els.gaugeProgress.style.strokeDasharray = `${GAUGE_CIRCUMFERENCE}`;
     els.gaugeProgress.style.strokeDashoffset = `${GAUGE_CIRCUMFERENCE}`;
@@ -100,299 +91,356 @@ async function init() {
     if (history.length) {
       renderResult(history[0], { readOnly: true });
     } else {
-      els.emptyState.classList.remove("hidden");
-      els.resultView.classList.add("hidden");
+      showEmptyState();
     }
   }
 
   renderStatsLine();
-  autoScanActiveTabIfOnWebTab();
+  scanActiveTab();
+}
+
+async function setupTheme() {
+  const settings = await getSettings();
+  document.documentElement.setAttribute("data-theme", settings.theme || "dark");
+
+  if (els.themeToggleBtn) {
+    els.themeToggleBtn.addEventListener("click", async () => {
+      const current = document.documentElement.getAttribute("data-theme");
+      const next = current === "light" ? "dark" : "light";
+      document.documentElement.setAttribute("data-theme", next);
+      await saveSettings({ theme: next });
+    });
+  }
 }
 
 function wireTabsAndButtons() {
-  els.optionsBtn.addEventListener("click", () => chrome.runtime.openOptionsPage());
-
-  // Tab switching
   els.tabDownload.addEventListener("click", () => switchTab("download"));
-  els.tabWebsite.addEventListener("click", () => {
-    switchTab("website");
-    triggerActiveTabScan();
-  });
+  els.tabWebsite.addEventListener("click", () => switchTab("website"));
   els.tabHistory.addEventListener("click", () => {
     switchTab("history");
     renderHistoryView();
   });
 
-  els.scanActiveTabBtn.addEventListener("click", triggerActiveTabScan);
+  els.optionsBtn.addEventListener("click", () => {
+    if (chrome.runtime.openOptionsPage) {
+      chrome.runtime.openOptionsPage();
+    } else {
+      window.open(chrome.runtime.getURL("options/options.html"));
+    }
+  });
+
+  els.scanActiveTabBtn.addEventListener("click", scanActiveTab);
+
   els.resumeBtn.addEventListener("click", () => resolveCurrent("resumed"));
   els.deleteBtn.addEventListener("click", () => resolveCurrent("deleted"));
-  els.detailsBtn.addEventListener("click", () => {
-    if (currentRecord) chrome.downloads.show(currentRecord.downloadId);
-  });
+  els.detailsBtn.addEventListener("click", () => chrome.tabs.create({ url: "chrome://downloads" }));
 }
 
 function switchTab(target) {
-  els.tabDownload.classList.toggle("active", target === "download");
-  els.tabWebsite.classList.toggle("active", target === "website");
-  els.tabHistory.classList.toggle("active", target === "history");
+  [els.tabDownload, els.tabWebsite, els.tabHistory].forEach((btn) => btn.classList.remove("active"));
+  [els.downloadView, els.websiteView, els.historyPanel].forEach((view) => view.classList.add("hidden"));
 
-  els.downloadView.classList.toggle("hidden", target !== "download");
-  els.websiteView.classList.toggle("hidden", target !== "website");
-  els.historyPanel.classList.toggle("hidden", target !== "history");
+  if (target === "download") {
+    els.tabDownload.classList.add("active");
+    els.downloadView.classList.remove("hidden");
+  } else if (target === "website") {
+    els.tabWebsite.classList.add("active");
+    els.websiteView.classList.remove("hidden");
+  } else if (target === "history") {
+    els.tabHistory.classList.add("active");
+    els.historyPanel.classList.remove("hidden");
+  }
 }
 
+function showEmptyState() {
+  els.emptyState.classList.remove("hidden");
+  els.resultView.classList.add("hidden");
+}
+
+function scoreColor(score) {
+  if (score >= 80) return "var(--color-safe)";
+  if (score >= 65) return "var(--color-low)";
+  if (score >= 50) return "var(--color-medium)";
+  return "var(--color-danger)";
+}
+
+/**
+ * Render Scan Result with strict textContent assignment (Fix for Bug 1 XSS).
+ * @param {import("../types/typedefs.js").ScanRecord} record
+ * @param {Object} [options]
+ * @param {boolean} [options.readOnly=false]
+ */
 function renderResult(record, { readOnly = false } = {}) {
   currentRecord = record;
   els.emptyState.classList.add("hidden");
   els.resultView.classList.remove("hidden");
 
-  const ext = (record.extension || "FILE").slice(0, 5).toUpperCase();
-  els.fileExtBadge.textContent = ext;
-  els.fileExtBadge.className = `file-ext-badge cat-${record.category || "other"}`;
+  // Secure Text Content Assignment (Prevents XSS)
+  els.fileExtBadge.textContent = (record.extension || "file").toUpperCase();
+  els.fileName.textContent = record.filename || "download";
+  els.fileName.title = record.filename || "";
+  els.fileDomain.textContent = record.domain || "local";
 
-  els.fileName.textContent = record.filename;
-  els.fileName.title = record.filename;
-  els.fileDomain.textContent = record.domain;
+  animateGauge(record.trustScore);
+  setRiskBadge(record.riskLevel, record.trustScore);
+  setRecommendationBanner(record.recommendation);
+  renderFactorList(record);
 
-  const score = Math.max(0, Math.min(100, Math.round(record.trustScore || 0)));
-  const risk = record.riskLevel || getRiskLevelText(score);
-
-  els.gaugeRiskLabel.textContent = risk;
-
-  // Update Score Gauge
-  updateGauge(score, record);
-
-  // Recommendation Banner
-  const recRisk = record.recommendation ? record.recommendation.riskLevel : (score >= 80 ? "safe" : score >= 50 ? "warning" : "dangerous");
-  els.recommendationBanner.className = `recommendation-banner risk-${recRisk}`;
-  els.recHeadline.textContent = record.recommendation ? record.recommendation.headline : "Security Audit Completed";
-  els.recDetail.textContent = record.recommendation ? record.recommendation.detail : "Review the factor breakdown below.";
-
-  // Update icon in recommendation banner
-  updateRecIcon(recRisk);
-
-  renderFactors(record);
-
-  const pendingActions = !readOnly && record.action === "pending";
-  els.resumeBtn.classList.toggle("hidden", !pendingActions);
-  els.deleteBtn.classList.toggle("hidden", !pendingActions);
+  if (readOnly || record.action !== "pending") {
+    els.resumeBtn.classList.add("hidden");
+    els.deleteBtn.classList.add("hidden");
+  } else {
+    els.resumeBtn.classList.remove("hidden");
+    els.deleteBtn.classList.remove("hidden");
+  }
 
   if (record.websiteSecurity) {
-    renderWebsiteSecurity(record.websiteSecurity);
+    renderWebAuditView(record.websiteSecurity);
+  } else {
+    renderInternalWebAuditView(record.url || record.domain);
   }
 }
 
-function updateGauge(targetScore, record) {
-  const color = scoreColor(targetScore);
-  document.documentElement.style.setProperty("--gauge-color", color);
-
-  // Smooth stroke-dashoffset animation
-  const offset = GAUGE_CIRCUMFERENCE * (1 - targetScore / 100);
-  els.gaugeProgress.style.strokeDashoffset = `${offset}`;
-
-  // Animate numerical score counter smoothly
-  animateScoreCounter(targetScore);
-
-  // Render outer factor breakdown track (segmented outer ring)
-  renderFactorSegments(record);
-}
-
-function animateScoreCounter(targetScore) {
+function animateGauge(targetScore) {
   if (animationFrameId) cancelAnimationFrame(animationFrameId);
 
   const startScore = displayedScore;
   const startTime = performance.now();
-  const duration = 600; // ms
+  const duration = 600;
 
   function step(now) {
-    const elapsed = now - startTime;
-    const progress = Math.min(1, elapsed / duration);
-    // Ease-out quad
-    const easeProgress = 1 - (1 - progress) * (1 - progress);
-    
-    displayedScore = Math.round(startScore + (targetScore - startScore) * easeProgress);
+    const progress = Math.min(1, (now - startTime) / duration);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    displayedScore = Math.round(startScore + (targetScore - startScore) * eased);
+
     els.gaugeScore.textContent = displayedScore;
+    const color = scoreColor(displayedScore);
+    const offset = GAUGE_CIRCUMFERENCE * (1 - displayedScore / 100);
+
+    els.gaugeProgress.style.strokeDashoffset = `${offset}`;
+    els.gaugeProgress.style.stroke = color;
+    els.gaugeScore.style.color = color;
 
     if (progress < 1) {
       animationFrameId = requestAnimationFrame(step);
-    } else {
-      displayedScore = targetScore;
-      els.gaugeScore.textContent = targetScore;
     }
   }
 
   animationFrameId = requestAnimationFrame(step);
 }
 
-function renderFactorSegments(record) {
-  const track = els.gaugeFactorTrack;
-  track.innerHTML = "";
+function setRiskBadge(riskLevel, score) {
+  els.gaugeRiskBadge.className = `gauge-risk-pill risk-${riskLevel}`;
+  let label = "SAFE";
+  if (riskLevel === "low_risk") label = "LOW RISK";
+  else if (riskLevel === "medium_risk") label = "MEDIUM RISK";
+  else if (riskLevel === "dangerous") label = "HIGH RISK";
 
-  let currentOffset = 0;
-  const gapPixels = 4; // Gap between factor segments in SVG px
-
-  for (const meta of FACTOR_META) {
-    const weight = WEIGHTS[meta.key] || 0.1;
-    const segmentLength = weight * FACTOR_CIRCUMFERENCE;
-    const visibleLength = Math.max(2, segmentLength - gapPixels);
-
-    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    circle.setAttribute("cx", "100");
-    circle.setAttribute("cy", "100");
-    circle.setAttribute("r", `${FACTOR_R}`);
-    circle.setAttribute("fill", "none");
-    circle.setAttribute("stroke-width", "3");
-
-    const segColor = meta.applicable(record) ? scoreColor(meta.from(record)) : "rgba(255, 255, 255, 0.08)";
-    circle.setAttribute("stroke", segColor);
-    circle.setAttribute("stroke-dasharray", `${visibleLength} ${FACTOR_CIRCUMFERENCE - visibleLength}`);
-    circle.setAttribute("stroke-dashoffset", `${-currentOffset}`);
-
-    track.appendChild(circle);
-    currentOffset += segmentLength;
-  }
+  els.gaugeRiskLabel.textContent = label;
 }
 
-function scoreColor(score) {
-  if (score >= 80) return "var(--accent-safe)";
-  if (score >= 50) return "var(--accent-warn)";
-  return "var(--accent-danger)";
+function setRecommendationBanner(rec) {
+  if (!rec) return;
+  els.recommendationBanner.className = `recommendation-banner banner-${rec.riskLevel}`;
+  els.recHeadline.textContent = rec.headline || "Analysis Complete";
+  els.recDetail.textContent = rec.summary || "";
 }
 
-function getRiskLevelText(score) {
-  if (score >= 80) return "SAFE";
-  if (score >= 50) return "CAUTION";
-  return "HIGH RISK";
-}
+/**
+ * Render security factors list where factor row container itself is the solid progress bar.
+ * @param {import("../types/typedefs.js").ScanRecord} record
+ */
+function renderFactorList(record) {
+  els.factorList.textContent = "";
 
-function updateRecIcon(riskLevel) {
-  if (riskLevel === "safe") {
-    els.recIcon.innerHTML = `
-      <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-      <polyline points="22 4 12 14.01 9 11.01"/>
-    `;
-  } else if (riskLevel === "warning") {
-    els.recIcon.innerHTML = `
-      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3z"/>
-      <line x1="12" y1="9" x2="12" y2="13"/>
-      <line x1="12" y1="17" x2="12.01" y2="17"/>
-    `;
-  } else {
-    els.recIcon.innerHTML = `
-      <circle cx="12" cy="12" r="10"/>
-      <line x1="15" y1="9" x2="9" y2="15"/>
-      <line x1="9" y1="9" x2="15" y2="15"/>
-    `;
-  }
-}
+  for (const factor of FACTOR_META) {
+    if (!factor.applicable(record)) continue;
+    const val = factor.from(record);
+    const weightPct = Math.round((WEIGHTS[factor.key] || 0) * 100);
 
-function renderFactors(record) {
-  els.factorList.innerHTML = "";
-  for (const meta of FACTOR_META) {
     const row = document.createElement("div");
     row.className = "factor-row";
 
-    if (!meta.applicable(record)) {
-      row.innerHTML = `
-        <span class="factor-label">${meta.label}</span>
-        <span class="factor-track"><span class="factor-fill factor-fill-na"></span></span>
-        <span class="factor-value factor-value-na">N/A</span>
-      `;
-      els.factorList.appendChild(row);
-      continue;
+    // Factor Row Solid Progress Fill
+    const fill = document.createElement("div");
+    if (val !== null && val !== undefined) {
+      fill.className = "factor-row-fill";
+      const clampedVal = Math.max(0, Math.min(100, val));
+      const color = scoreColor(clampedVal);
+      fill.style.width = `${clampedVal}%`;
+      fill.style.backgroundColor = color;
+    } else {
+      fill.className = "factor-row-fill na";
     }
+    row.appendChild(fill);
 
-    const score = Math.round(meta.from(record));
-    row.innerHTML = `
-      <span class="factor-label">${meta.label}</span>
-      <span class="factor-track"><span class="factor-fill" style="width:${score}%;background:${scoreColor(score)}"></span></span>
-      <span class="factor-value">${score}%</span>
-    `;
+    const labelWrap = document.createElement("div");
+    labelWrap.className = "factor-label-wrap";
+
+    const label = document.createElement("span");
+    label.className = "factor-label";
+    label.textContent = factor.label;
+
+    const weight = document.createElement("span");
+    weight.className = "factor-weight";
+    weight.textContent = `${weightPct}% weight`;
+
+    labelWrap.appendChild(label);
+    labelWrap.appendChild(weight);
+
+    const scoreBadge = document.createElement("span");
+    scoreBadge.className = "factor-score";
+    scoreBadge.textContent = val !== null && val !== undefined ? `${val}` : "N/A";
+
+    row.appendChild(labelWrap);
+    row.appendChild(scoreBadge);
     els.factorList.appendChild(row);
-  }
-
-  const { checksApplicable, checksTotal } = record;
-  if (typeof checksApplicable === "number" && checksApplicable < checksTotal) {
-    const note = document.createElement("div");
-    note.className = "factor-note";
-    note.textContent = `Score reflects ${checksApplicable} of ${checksTotal} checks. Configure API keys in Settings to enable VirusTotal & Safe Browsing checks.`;
-    els.factorList.appendChild(note);
   }
 }
 
-async function triggerActiveTabScan() {
-  els.scanBtnText.textContent = "Auditing Webpage Security...";
+async function scanActiveTab() {
+  els.scanBtnText.textContent = "Scanning...";
   const res = await chrome.runtime.sendMessage({ type: "SD_GET_ACTIVE_TAB_SECURITY" }).catch(() => null);
   els.scanBtnText.textContent = "Scan Current Webpage";
 
   if (res && res.audit) {
-    renderWebsiteSecurity(res.audit);
-  } else if (res && res.error) {
-    els.vulnList.innerHTML = `<p class="empty-sub text-center" style="padding:16px;color:var(--accent-warn)">${res.error}</p>`;
+    renderWebAuditView(res.audit);
+  } else if (res && (res.isInternal || res.error)) {
+    renderInternalWebAuditView(res.url || "");
   }
 }
 
-async function autoScanActiveTabIfOnWebTab() {
-  chrome.tabs.query({ active: true, currentWindow: true }, async ([tab]) => {
-    if (tab && tab.url && tab.url.startsWith("http")) {
-      const res = await chrome.runtime.sendMessage({ type: "SD_ANALYZE_WEBSITE", url: tab.url }).catch(() => null);
-      if (res && res.audit) {
-        renderWebsiteSecurity(res.audit);
-      }
+/**
+ * Render Web Audit for Internal or non-HTTP browser pages.
+ * @param {string} [rawUrl=""]
+ */
+function renderInternalWebAuditView(rawUrl = "") {
+  let displayDomain = "Internal Browser Page";
+  if (rawUrl) {
+    try {
+      const parsed = new URL(rawUrl);
+      displayDomain = `${parsed.protocol.replace(":", "")}:// page`;
+    } catch {
+      displayDomain = rawUrl;
     }
-  });
+  }
+
+  els.webDomain.textContent = displayDomain;
+  els.webSslBadge.textContent = "SYSTEM PAGE";
+  els.webSslBadge.className = "badge";
+  els.webSslBadge.style.backgroundColor = "var(--bg-card)";
+  els.webSslBadge.style.color = "var(--text-muted)";
+  els.webSslBadge.style.border = "1px solid var(--border-color)";
+
+  els.webScoreBadge.textContent = "N/A";
+  els.webScoreRing.style.background = "var(--bg-card)";
+
+  setValPill(els.hstsStatus, false, "N/A");
+  setValPill(els.cspStatus, false, "N/A");
+  setValPill(els.corsStatus, false, "N/A");
+  setValPill(els.xfoStatus, false, "N/A");
+
+  els.vulnList.textContent = "";
+  const infoCard = document.createElement("div");
+  infoCard.className = "vuln-card clean";
+
+  const title = document.createElement("div");
+  title.className = "v-title";
+  title.textContent = "Browser Internal / Non-HTTP Page";
+
+  const desc = document.createElement("p");
+  desc.className = "v-harm text-muted";
+  desc.textContent = "Internal browser URLs (chrome://, chrome-extension://, newtab, about:) are restricted system pages and cannot be audited for external web security headers.";
+
+  infoCard.appendChild(title);
+  infoCard.appendChild(desc);
+  els.vulnList.appendChild(infoCard);
 }
 
-function renderWebsiteSecurity(audit) {
-  els.webDomain.textContent = audit.domain || "website";
-  els.webSslBadge.textContent = audit.isHttps ? "HTTPS SSL" : "INSECURE HTTP";
+/**
+ * Render Website Vulnerability Audit (Fix for Bug 1 XSS).
+ * @param {import("../types/typedefs.js").WebAuditResult} audit
+ */
+function renderWebAuditView(audit) {
+  if (!audit) return;
+
+  els.webDomain.textContent = audit.domain || "Website Audit";
+  els.webSslBadge.textContent = audit.isHttps ? "HTTPS SSL" : "HTTP INSECURE";
   els.webSslBadge.className = `badge ${audit.isHttps ? "badge-safe" : "badge-danger"}`;
 
-  const score = audit.websiteSecurityScore ?? 50;
+  const score = audit.webSecurityScore ?? 50;
   els.webScoreBadge.textContent = score;
   els.webScoreRing.style.background = scoreColor(score);
 
-  // Security Headers Grid
-  const sh = audit.securityHeaders || {};
-  setValPill(els.hstsStatus, sh.hsts !== "Not Set", sh.hsts);
-  setValPill(els.cspStatus, sh.csp !== "Not Set", sh.csp);
-  setValPill(els.corsStatus, sh.cors !== "*", sh.cors);
-  setValPill(els.xfoStatus, sh.xfo !== "Not Set", sh.xfo);
+  const sh = audit.headersPresent || {};
+  setValPill(els.hstsStatus, sh.hsts, sh.hsts ? "Active" : "Missing");
+  setValPill(els.cspStatus, sh.csp, sh.csp ? "Active" : "Missing");
+  setValPill(els.corsStatus, sh.cors, sh.cors ? "Configured" : "Wildcard/*");
+  setValPill(els.xfoStatus, sh.xfo, sh.xfo ? "Active" : "Missing");
 
-  // Render Vulnerabilities list
-  els.vulnList.innerHTML = "";
+  // Secure DOM Element Construction (Fix for Bug 1 XSS)
+  els.vulnList.textContent = "";
   const vulns = audit.vulnerabilities || [];
 
   if (!vulns.length) {
-    els.vulnList.innerHTML = `
-      <div class="vuln-card clean">
-        <div class="vuln-header">
-          <span class="v-title">✅ No Critical Vulnerabilities Detected</span>
-          <span class="threat-tag level-safe">SECURE</span>
-        </div>
-        <p class="v-harm text-muted">The website enforces HTTPS, security headers, and domain trust parameters.</p>
-      </div>
-    `;
+    const cleanCard = document.createElement("div");
+    cleanCard.className = "vuln-card clean";
+
+    const title = document.createElement("div");
+    title.className = "v-title";
+    title.textContent = "No Critical Vulnerabilities Detected";
+
+    const desc = document.createElement("p");
+    desc.className = "v-harm text-muted";
+    desc.textContent = "The website enforces HTTPS, security headers, and domain trust parameters.";
+
+    cleanCard.appendChild(title);
+    cleanCard.appendChild(desc);
+    els.vulnList.appendChild(cleanCard);
     return;
   }
 
   for (const v of vulns) {
     const card = document.createElement("div");
-    const threatClass = `level-${(v.threatLevel || "medium").toLowerCase()}`;
-
-    const owaspTag = v.owaspCategory ? `<div class="owasp-badge">${v.owaspCategory}</div>` : "";
     card.className = "vuln-card";
-    card.innerHTML = `
-      <div class="vuln-header">
-        <span class="v-title">${v.title}</span>
-        <span class="threat-tag ${threatClass}">${v.threatLevel.toUpperCase()} THREAT</span>
-      </div>
-      ${owaspTag}
-      <div class="harm-box">
-        <span class="harm-title">Unethical Harm & Exploit Risk</span>
-        <p class="v-harm">${v.unethicalHarm}</p>
-      </div>
-    `;
+
+    const header = document.createElement("div");
+    header.className = "vuln-header";
+
+    const vTitle = document.createElement("span");
+    vTitle.className = "v-title";
+    vTitle.textContent = v.title || "Vulnerability Alert";
+
+    const tag = document.createElement("span");
+    tag.className = `threat-tag level-${(v.severity || "medium").toLowerCase()}`;
+    tag.textContent = `${(v.severity || "MEDIUM").toUpperCase()} THREAT`;
+
+    header.appendChild(vTitle);
+    header.appendChild(tag);
+    card.appendChild(header);
+
+    if (v.description) {
+      const owasp = document.createElement("div");
+      owasp.className = "owasp-badge";
+      owasp.textContent = v.description;
+      card.appendChild(owasp);
+    }
+
+    const harmBox = document.createElement("div");
+    harmBox.className = "harm-box";
+
+    const harmTitle = document.createElement("span");
+    harmTitle.className = "harm-title";
+    harmTitle.textContent = "Unethical Harm & Exploit Risk";
+
+    const harmDesc = document.createElement("p");
+    harmDesc.className = "v-harm";
+    harmDesc.textContent = v.harmScenario || "";
+
+    harmBox.appendChild(harmTitle);
+    harmBox.appendChild(harmDesc);
+    card.appendChild(harmBox);
+
     els.vulnList.appendChild(card);
   }
 }
@@ -415,48 +463,64 @@ async function resolveCurrent(action) {
   renderStatsLine();
 }
 
-async function getHistory() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get("sd_history", (data) => resolve(data.sd_history || []));
-  });
-}
-
-async function getStats() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get("sd_stats", (data) =>
-      resolve(data.sd_stats || { totalScanned: 0, safe: 0, warning: 0, dangerous: 0, filesBlocked: 0 })
-    );
-  });
-}
-
 async function renderStatsLine() {
   const stats = await getStats();
-  els.statsLine.textContent = `${stats.totalScanned} scanned · ${stats.filesBlocked} blocked`;
+  els.statsLine.textContent = `${stats.totalScans} scanned · ${stats.dangerousBlocked} blocked`;
 }
 
+/**
+ * Render scan audit history with secure DOM element creation (Fix for Bug 1 XSS & Bug 7 duplication).
+ */
 async function renderHistoryView() {
   const history = await getHistory();
-  els.historyList.innerHTML = "";
+  els.historyList.textContent = "";
+
   if (!history.length) {
-    els.historyList.innerHTML = `<p style="color:var(--text-muted);font-size:12px;padding:12px 6px;">No scan audit history recorded yet.</p>`;
-  } else {
-    for (const record of history) {
-      const item = document.createElement("div");
-      item.className = "history-item";
-      const badgeColor = scoreColor(record.trustScore);
-      item.innerHTML = `
-        <div class="h-meta">
-          <span class="h-name" title="${record.filename}">${record.filename}</span>
-          <span class="h-sub">${record.domain} · ${(record.extension || "file").toUpperCase()}</span>
-        </div>
-        <span class="h-score-badge" style="background:${badgeColor}20;color:${badgeColor};border:1px solid ${badgeColor}40">${record.trustScore}</span>
-      `;
-      item.addEventListener("click", () => {
-        switchTab("download");
-        renderResult(record, { readOnly: true });
-      });
-      els.historyList.appendChild(item);
-    }
+    const emptyNotice = document.createElement("p");
+    emptyNotice.style.color = "var(--text-muted)";
+    emptyNotice.style.fontSize = "12px";
+    emptyNotice.style.padding = "12px 6px";
+    emptyNotice.textContent = "No scan audit history recorded yet.";
+    els.historyList.appendChild(emptyNotice);
+    return;
+  }
+
+  for (const record of history) {
+    const item = document.createElement("div");
+    item.className = "history-item";
+
+    const meta = document.createElement("div");
+    meta.className = "h-meta";
+
+    const name = document.createElement("span");
+    name.className = "h-name";
+    name.textContent = record.filename || "download";
+    name.title = record.filename || "";
+
+    const sub = document.createElement("span");
+    sub.className = "h-sub";
+    sub.textContent = `${record.domain || "local"} · ${(record.extension || "file").toUpperCase()}`;
+
+    meta.appendChild(name);
+    meta.appendChild(sub);
+
+    const badge = document.createElement("span");
+    badge.className = "h-score-badge";
+    const badgeColor = scoreColor(record.trustScore);
+    badge.style.background = `${badgeColor}20`;
+    badge.style.color = badgeColor;
+    badge.style.border = `1px solid ${badgeColor}40`;
+    badge.textContent = `${record.trustScore}`;
+
+    item.appendChild(meta);
+    item.appendChild(badge);
+
+    item.addEventListener("click", () => {
+      switchTab("download");
+      renderResult(record, { readOnly: true });
+    });
+
+    els.historyList.appendChild(item);
   }
 }
 
